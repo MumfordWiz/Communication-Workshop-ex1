@@ -1,4 +1,3 @@
-#saper
 """
 OpenFlow Exercise - Sample File
 This file was created as part of the course Workshop in Communication Networks
