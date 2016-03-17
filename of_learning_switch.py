@@ -23,6 +23,7 @@ class Tutorial (object):
     A Connection object for that switch is passed to the __init__ function.
     """
     def __init__ (self, connection):
+        self.ports = {}
         self.connection = connection
 
         # This binds our PacketIn event listener
@@ -44,7 +45,7 @@ class Tutorial (object):
 
         packet_in = event.ofp # packet_in is the OpenFlow packet sent by the switch
 
-        self.act_like_hub(packet, packet_in)
+        self.act_like_switch(packet, packet_in)
 
     def send_packet (self, buffer_id, raw_data, out_port, in_port):
         """
@@ -77,6 +78,23 @@ class Tutorial (object):
 
         # Send message to switch
         self.connection.send(msg)
+
+    def send_flow_mod(self, packet, packet_in, dest):
+        fm = of.ofp_flow_mod()
+        fm.match.in_port = packet_in.in_port
+        # it is not mandatory to set fm.data or fm.buffer_id
+        if packet_in.buffer_id != -1 and packet_in.buffer_id is not None:
+            # Valid buffer ID was sent from switch, we do not need to encapsulate raw data in response
+            fm.buffer_id = packet_in.buffer_id
+        else:
+            if packet_in.data is not None:
+                # No valid buffer ID was sent but raw data exists, send raw data with flow_mod
+                fm.data = packet_in.data
+        action = of.ofp_action_output(port=dest)
+        fm.actions.append(action)
+
+        # Send message to switch
+        self.connection.send(fm)
 
     def send_flow_mod_by_in_port(self, in_port, action, buffer_id, raw_data):
         fm = of.ofp_flow_mod()
@@ -123,6 +141,16 @@ class Tutorial (object):
         ### packets in the switch:
         self.add_flood_rule_to_flowtable(packet_in.buffer_id, packet_in.data, packet_in.in_port)
         pass
+
+    def act_like_switch(self, packet, packet_in):
+        self.ports[packet.src] = packet_in.in_port
+        if packet.dst in self.ports:
+            self.send_flow_mod(packet, packet_in, self.ports[packet.dst])
+        else:
+            ####FLOODING
+            self.send_packet(packet_in.buffer_id, packet_in.data, of.OFPP_FLOOD, packet_in.in_port)
+
+
 
 def launch ():
     """
