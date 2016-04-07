@@ -4,7 +4,7 @@ in the Hebrew University of Jerusalem.
 """
 
 import threading
-
+from collections import defaultdict
 class UnionFind:
     """ This class implements the operations on the disjoint-set data structure.
     The operations are performed on any Python object, by adding two additional
@@ -68,16 +68,22 @@ class SingletonType(type):
 # class MyOwnSingletonClass:
 #     __metaclass__ = utils.SingletonType
 # #... rest of class ...
+class Node(object):
+    def __init__(self, dpid):
+        self.dpid = dpid
+
+    def __str__(self):
+        return str(self.dpid)
 
 class Graph:
     def __init__(self):
-        self.nodes = {}
+        self.nodes = defaultdict(Node)
         self.edges = {}
     
     def add_node(self, label, data):
         if label not in self.nodes:
             self.nodes[label] = data
-    
+
     def add_edge(self, a, b, data):
         if (a, b) not in self.edges and (b, a) not in self.edges:
             self.edges[(a, b)] = data
@@ -95,7 +101,14 @@ class Graph:
             return self.edges[(b, a)]
         else:
             return None
-    
+    def update_edge(self, a, b, data):
+        if (a, b) in self.edges:
+            self.edges[(a, b)] = data
+        elif (b, a) in self.edges:
+            self.edges[(b, a)] = data
+        else:
+            return None
+
     def remove_node(self, label):
         self.nodes.pop(label, None)
         
