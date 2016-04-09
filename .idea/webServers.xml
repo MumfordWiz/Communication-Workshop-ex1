@@ -2,10 +2,10 @@
 <project version="4">
   <component name="WebServers">
     <option name="servers">
-      <webServer id="68a746ea-6b54-4971-a81f-d506defccb54" name="mininet" url="http://192.168.56.101">
+      <webServer id="037da26b-cbe8-4173-ad3a-9d5936414870" name="mininet" url="http://192.168.56.101">
         <fileTransfer host="192.168.56.101" port="22" accessType="SFTP" password="dfc7dfc3dfc4dfc3dfc4dfcfdfde" username="mininet">
           <advancedOptions>
-            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="100000" />
+            <advancedOptions dataProtectionLevel="Private" />
           </advancedOptions>
           <option name="port" value="22" />
         </fileTransfer>
