@@ -9,7 +9,6 @@ This code is based on the official OpenFlow tutorial code.
 from pox.core import core
 import pox.openflow.libopenflow_01 as of
 import time
-import copy
 import threading
 from pox.core import core
 import pox.openflow.libopenflow_01 as of
@@ -17,6 +16,7 @@ import utils
 from pox.lib.packet.lldp import lldp, chassis_id, port_id, ttl, end_tlv
 from pox.lib.packet.ethernet import ethernet
 log = core.getLogger()
+tutorial_list = []
 
 class Tutorial (object):
     """
@@ -28,7 +28,7 @@ class Tutorial (object):
         self.forward_table = {}
         self.connection = connection
         # self.discovery = Discovery()
-        Discovery.get_node(connection.dpid).connection = connection
+        # Discovery.get_node(connection.dpid).connection = connection
         # This binds our PacketIn event listener
         connection.addListeners(self)
 
@@ -207,7 +207,9 @@ class Discovery(object):
         timer = utils.Timer(Discovery.LLDP_INTERVAL,self._send_lldp,args=[event],recurring=True)
         log.debug("New switch ConnectionUp dpid : {}".format(event.dpid))
         self.lock.acquire()
-        self.topology.add_node(utils.Node(event.dpid), {})
+        node = utils.Node(event.dpid)
+        self.set_tutorial(node, event.connection)
+        self.topology.add_node(node, {})
         self.lock.release()
         #send flow to the switch to pass every lldp packet to the controller
         fm = of.ofp_flow_mod()
@@ -219,6 +221,14 @@ class Discovery(object):
         # Send flow to the switch
         event.connection.send(fm)
 
+    @staticmethod
+    def set_tutorial(node, connection):
+        for tuto in tutorial_list:
+            if tuto.connection == connection:
+                log.debug("set_Tutorial, node: {}".format(node.dpid))
+                node.turorial = tuto
+
+        return False
     def _handle_ConnectionDown(self, event):
         """"
         Will be called when a switch goes down. Use event.dpid for switch ID.
@@ -398,7 +408,8 @@ def launch ():
     """
     def start_switch (event):
         log.debug("Controlling %s" % (event.connection,))
-        Tutorial(event.connection)
-    core.register('discovery', Discovery())
+        t = Tutorial(event.connection)
+        tutorial_list.append(t)
     core.openflow.addListenerByName("ConnectionUp", start_switch)
+    core.register('discovery', Discovery())
 
