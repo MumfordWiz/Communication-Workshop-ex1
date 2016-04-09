@@ -71,6 +71,7 @@ class SingletonType(type):
 class Node(object):
     def __init__(self, dpid):
         self.dpid = dpid
+        self.connection = None
 
     def __str__(self):
         return str(self.dpid)

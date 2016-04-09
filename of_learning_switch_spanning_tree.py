@@ -23,10 +23,12 @@ class Tutorial (object):
     A Tutorial object is created for each switch that connects.
     A Connection object for that switch is passed to the __init__ function.
     """
-    def __init__ (self, connection):
-        self.ports = {}
-        self.connection = connection
 
+    def __init__ (self, connection):
+        self.forward_table = {}
+        self.connection = connection
+        # self.discovery = Discovery()
+        Discovery.get_node(connection.dpid).connection = connection
         # This binds our PacketIn event listener
         connection.addListeners(self)
 
@@ -152,18 +154,18 @@ class Tutorial (object):
         # print(time.now())
         print ("Act like switch")
 
-        if packet.src in self.ports and packet_in.in_port != self.ports[packet.src]:
+        if packet.src in self.forward_table and packet_in.in_port != self.forward_table[packet.src]:
             self.remove_flow(packet.src)
-        self.ports[packet.src] = packet_in.in_port
+        self.forward_table[packet.src] = packet_in.in_port
         # print("pckt in ")
         # print(packet.src, packet.dst)
         # print(packet_in.in_port)
         # print(self.connection)
         # print(self.ports)
 
-        if packet.dst in self.ports:
+        if packet.dst in self.forward_table:
             print("found in ports")
-            self.send_flow_mod(packet, packet_in, self.ports[packet.dst])
+            self.send_flow_mod(packet, packet_in, self.forward_table[packet.dst])
         else:
             ####FLOODING
             log.debug('Flooding packet : dest = {} src = {} in_port = {}'.format(packet.dst, packet.src, packet_in.in_port))
@@ -187,9 +189,16 @@ class Discovery(object):
         self.topology = utils.Graph()
         self.edge_timer = utils.Timer(3,self.run_edges,recurring=True)
         self.lock = threading.Lock()
+        self.sub_tree = []
 
 
 
+    def is_port_active(self, node, port):
+        for edge in self.sub_tree:
+            if node in edge:
+                if self.topology.nodes[node][port][0] in edge:
+                    return True
+        return False
     def _handle_ConnectionUp(self, event):
         """"
         Will be called when a switch is added. Use event.dpid for switch ID,
@@ -220,6 +229,7 @@ class Discovery(object):
         for port, port_data in self.topology.nodes[node].iteritems():
             self.remove_edge((node,port_data[0]))
         self.topology.remove_node(node)
+        self.Kruskal_Mst()
         self.lock.release()
 
     def _handle_PortStatus(self, event):
@@ -239,6 +249,7 @@ class Discovery(object):
                 self.remove_edge(edge,'')
                 log.debug(str(node) + self.ports_dict_to_string(self.topology.nodes[node]))
                 log.debug(str(far_node) +self.ports_dict_to_string(self.topology.nodes[far_node]))
+                self.Kruskal_Mst()
             else:
                 log.debug("Trying to remove a not active edge : Switch {} port{}".format(event.dpid, event.port))
             self.lock.release()
@@ -271,6 +282,7 @@ class Discovery(object):
             self.topology.add_edge(node,far_node,time.time())
             self.topology.nodes[node][event.port] = (far_node,r_port)
             self.topology.nodes[far_node][r_port] = (node, event.port)
+            self.Kruskal_Mst()
             log.debug("added new edge")
             log.debug(str(node) + self.ports_dict_to_string(self.topology.nodes[node]))
             log.debug(str(far_node) + self.ports_dict_to_string(self.topology.nodes[far_node]))
@@ -333,6 +345,7 @@ class Discovery(object):
                 edges_to_remove += [edge]
         for e in edges_to_remove:
             self.remove_edge(e)
+        self.Kruskal_Mst()
 
         self.lock.release()
 
@@ -359,14 +372,14 @@ class Discovery(object):
 
     def Kruskal_Mst(self):
         uf = utils.UnionFind()
-        sub_tree = []
+
         for v in self.topology.nodes:
             uf.make_set(v)
         for edge in self.topology.edges:
             if uf.find(edge[0]) != uf.find(edge[1]):
-                sub_tree.append((edge[0],edge[1]))
+                self.sub_tree.append((edge[0],edge[1]))
                 uf.union(edge[0],edge[1])
-        return sub_tree
+
 
 
 
@@ -386,6 +399,6 @@ def launch ():
     def start_switch (event):
         log.debug("Controlling %s" % (event.connection,))
         Tutorial(event.connection)
-    core.openflow.addListenerByName("ConnectionUp", start_switch)
     core.register('discovery', Discovery())
+    core.openflow.addListenerByName("ConnectionUp", start_switch)
 
