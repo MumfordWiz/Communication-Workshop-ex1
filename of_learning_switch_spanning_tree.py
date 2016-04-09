@@ -27,11 +27,32 @@ class Tutorial (object):
     def __init__ (self, connection):
         self.forward_table = {}
         self.connection = connection
+        self.unauthorized_ports = []
         # self.discovery = Discovery()
         # Discovery.get_node(connection.dpid).connection = connection
         # This binds our PacketIn event listener
         connection.addListeners(self)
+    def update_flow_table(self):
+        log.debug('update flow table for switch {}'.format(self.connection.dpid))
+        mac_to_remove = []
+        for port in self.unauthorized_ports:
+            log.debug("in for")
+            for mac,in_port in self.forward_table.iteritems():
+                if in_port == port:
+                    mac_to_remove.append(mac)
+                    log.debug("sw " + str(self.connection.dpid) + " un_authorized port to disable " + str(in_port))
 
+            msg = of.ofp_flow_mod(command=of.OFPFC_DELETE, out_port=port)
+            self.connection.send(msg)
+            fm = of.ofp_flow_mod()
+            fm.command = of.OFPFC_DELETE
+            fm.match.in_port = port
+            self.connection.send(fm)  # send flow-mod message
+        log.debug('update flow table for switch {} removing mac list {}'.format(self.connection.dpid,mac_to_remove))
+        for mac in mac_to_remove:
+            log.debug("in mac for")
+            del self.forward_table[mac]
+            # self.remove_flow(mac)
     def _handle_PacketIn (self, event):
         """
         Handles packet in messages from the switch.
@@ -153,7 +174,9 @@ class Tutorial (object):
     def act_like_switch(self, packet, packet_in):
         # print(time.now())
         print ("Act like switch")
-
+        if packet_in.in_port in self.unauthorized_ports:
+            log.debug("SW " + str(self.connection.dpid) + " got packet from port " + str(packet_in.in_port) + "but UNAUTHORIZED")
+            return
         if packet.src in self.forward_table and packet_in.in_port != self.forward_table[packet.src]:
             self.remove_flow(packet.src)
         self.forward_table[packet.src] = packet_in.in_port
@@ -170,6 +193,7 @@ class Tutorial (object):
             ####FLOODING
             log.debug('Flooding packet : dest = {} src = {} in_port = {}'.format(packet.dst, packet.src, packet_in.in_port))
             self.send_packet(packet_in.buffer_id, packet_in.data, of.OFPP_FLOOD, packet_in.in_port)
+
     def remove_flow(self, source):
         log.debug('Remove flow : dest = {}'.format(source))
         fm = of.ofp_flow_mod()
@@ -225,9 +249,10 @@ class Discovery(object):
     def set_tutorial(node, connection):
         for tuto in tutorial_list:
             if tuto.connection == connection:
-                log.debug("set_Tutorial, node: {}".format(node.dpid))
                 node.turorial = tuto
+                log.debug("set_Tutorial, node: {} tutorial {}".format(node.dpid, node.turorial))
 
+                #TODO:: return true
         return False
     def _handle_ConnectionDown(self, event):
         """"
@@ -253,10 +278,13 @@ class Discovery(object):
             #port is down
             self.lock.acquire()
             node = self.get_node(event.dpid)
+            # self.node.tutorial.remove_flow_port(event.port)
+            msg = of.ofp_flow_mod(command=of.OFPFC_DELETE, out_port=event.port)
+            event.connection.send(msg)
             if event.port in self.topology.nodes[node]:
                 far_node = self.topology.nodes[node][event.port][0]
                 edge = (node, far_node)
-                self.remove_edge(edge,'')
+                self.remove_edge(edge)
                 log.debug(str(node) + self.ports_dict_to_string(self.topology.nodes[node]))
                 log.debug(str(far_node) +self.ports_dict_to_string(self.topology.nodes[far_node]))
                 self.Kruskal_Mst()
@@ -353,9 +381,10 @@ class Discovery(object):
             if time.time()-data > Discovery.TIME_TO_REMOVE:
                 log.debug("in automatic removal : edge ({},{})".format(edge[0].dpid,edge[1].dpid) )
                 edges_to_remove += [edge]
-        for e in edges_to_remove:
-            self.remove_edge(e)
-        self.Kruskal_Mst()
+        if edges_to_remove:
+            for e in edges_to_remove:
+                self.remove_edge(e)
+            self.Kruskal_Mst()
 
         self.lock.release()
 
@@ -381,23 +410,33 @@ class Discovery(object):
                 return node
 
     def Kruskal_Mst(self):
+        self.sub_tree = []
         uf = utils.UnionFind()
-
         for v in self.topology.nodes:
             uf.make_set(v)
         for edge in self.topology.edges:
             if uf.find(edge[0]) != uf.find(edge[1]):
                 self.sub_tree.append((edge[0],edge[1]))
                 uf.union(edge[0],edge[1])
+        log.debug("Kruskal new tree : {}".format(self.edges_to_str(self.sub_tree)))
+        log.debug("Kruskal full graph : {}".format(self.edges_to_str(self.topology.edges)))
+        self.update_unauthorized_ports()
 
 
+    def edges_to_str(self,edges):
+        str_to_print = ''
+        for edge in edges:
+            str_to_print += '(' + str(edge[0]) + "," + str(edge[1]) + ") "
+        return str_to_print
 
-
-
-
-
-
-
+    def update_unauthorized_ports(self):
+        for node, ports in self.topology.nodes.iteritems():
+            node.turorial.unauthorized_ports = []
+            for port in ports:
+                if not self.is_port_active(node, port):
+                    node.turorial.unauthorized_ports.append(port)
+            log.debug("Node : " + str(node) + " un_ports : " + str(node.turorial.unauthorized_ports))
+            node.turorial.update_flow_table()
 
 
 
