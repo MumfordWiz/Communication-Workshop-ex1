@@ -23,7 +23,7 @@ class Tutorial (object):
     A Connection object for that switch is passed to the __init__ function.
     """
     def __init__ (self, connection):
-        self.ports = {}
+        self.forward_table = {}
         self.connection = connection
 
         # This binds our PacketIn event listener
@@ -100,77 +100,26 @@ class Tutorial (object):
         # Send message to switch
         self.connection.send(fm)
 
-    def send_flow_mod_by_in_port(self, in_port, action, buffer_id, raw_data):
-        fm = of.ofp_flow_mod()
-        fm.match.in_port = in_port
-        # it is not mandatory to set fm.data or fm.buffer_id
-        if buffer_id != -1 and buffer_id is not None:
-            # Valid buffer ID was sent from switch, we do not need to encapsulate raw data in response
-            fm.buffer_id = buffer_id
-        else:
-            if raw_data is not None:
-                # No valid buffer ID was sent but raw data exists, send raw data with flow_mod
-                fm.data = raw_data
-
-        fm.actions.append(action)
-
-        # Send message to switch
-        self.connection.send(fm)
-#TODO: remove unused functions
-    def add_flood_rule_to_flowtable(self, buffer_id, raw_data, in_port):
-        action = of.ofp_action_output(port=of.OFPP_FLOOD)
-        # Use send_flow_mod_by_in_port to send an ofp_flow_mod to the switch with an output action
-        # to flood the packet and any future packets that are similar to it
-        self.send_flow_mod_by_in_port(in_port, action, buffer_id, raw_data)
-        pass
-
-    def act_like_hub (self, packet, packet_in):
-        """
-        Implement hub-like behavior -- send all packets to all ports besides
-        the input port.
-        """
-
-        ### We want to output to all ports -- we do that using the special
-        ### of.OFPP_FLOOD port as the output port.  (We could have also used
-        ### of.OFPP_ALL.)
-
-        ### Useful information on packet_in:
-        ### packet_in.buffer_id   - The ID of the buffer (packet data) on the switch
-        ### packet_in.data        - The raw data as sent by the switch
-        ### packet_in.in_port     - The port on which the packet arrived at the switch
-
-        # log.debug('Flooding packet')
-        ### We may either send the packet to switch and tell it to flood it_id, packet_in.data, of.OFPP_FLOOD, packet_in.in_port)
-        ### Or we may write a method that installs a permanent rule to flood such
-        ### packets in the switch:
-        self.add_flood_rule_to_flowtable(packet_in.buffer_id, packet_in.data, packet_in.in_port)
-        pass
 
     def act_like_switch(self, packet, packet_in):
-        # print(time.now())
-        print ("Act like switch")
 
-        if packet.src in self.ports and packet_in.in_port != self.ports[packet.src]:
+        if packet.src in self.forward_table and packet_in.in_port != self.forward_table[packet.src]:
             self.remove_flow(packet.src)
-        self.ports[packet.src] = packet_in.in_port
-        # print("pckt in ")
-        # print(packet.src, packet.dst)
-        # print(packet_in.in_port)
-        # print(self.connection)
-        # print(self.ports)
+        self.forward_table[packet.src] = packet_in.in_port
 
-        if packet.dst in self.ports:
-            print("found in ports")
-            self.send_flow_mod(packet, packet_in, self.ports[packet.dst])
+
+        if packet.dst in self.forward_table:
+            log.debug('Found dest in table. Adding flow rule for: packet: dest = {}; src = {}; in_port = {}'.format(packet.dst, packet.src, packet_in.in_port))
+            self.send_flow_mod(packet, packet_in, self.forward_table[packet.dst])
         else:
             ####FLOODING
-            log.debug('Flooding packet : dest = {} src = {} in_port = {}'.format(packet.dst, packet.src, packet_in.in_port))
+            log.debug('Flooding packet: dest = {}; src = {}; in_port = {}'.format(packet.dst, packet.src, packet_in.in_port))
             self.send_packet(packet_in.buffer_id, packet_in.data, of.OFPP_FLOOD, packet_in.in_port)
+
     def remove_flow(self, source):
-        log.debug('Remove flow : dest = {}'.format(source))
+        log.debug('Remove flow rule in SW: {}; dl_dest = {}'.format(self.connection.dpid, source))
         fm = of.ofp_flow_mod()
         fm.command = of.OFPFC_DELETE
-        # TODO : add match to dl_src and match.in_port
         fm.match.dl_dst = source # change this if necessary
         self.connection.send(fm) # send flow-mod message
 

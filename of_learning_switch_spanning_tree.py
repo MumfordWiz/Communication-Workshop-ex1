@@ -33,26 +33,15 @@ class Tutorial (object):
         # This binds our PacketIn event listener
         connection.addListeners(self)
     def update_flow_table(self):
-        log.debug('update flow table for switch {}'.format(self.connection.dpid))
-        mac_to_remove = []
+        """
+        This function goes over all ports found in unauthorized_port (port that are
+        forbidden from graph because of the spanning tree.) and ask remove_rules_by_port
+        to remove all the flows holding the forbidden ports.
+        """
+        # log.debug('update flow table for switch {}'.format(self.connection.dpid))
         for port in self.unauthorized_ports:
-            log.debug("in for")
-            for mac,in_port in self.forward_table.iteritems():
-                if in_port == port:
-                    mac_to_remove.append(mac)
-                    log.debug("sw " + str(self.connection.dpid) + " un_authorized port to disable " + str(in_port))
+            self.remove_rules_by_port(port)
 
-            msg = of.ofp_flow_mod(command=of.OFPFC_DELETE, out_port=port)
-            self.connection.send(msg)
-            fm = of.ofp_flow_mod()
-            fm.command = of.OFPFC_DELETE
-            fm.match.in_port = port
-            self.connection.send(fm)  # send flow-mod message
-        log.debug('update flow table for switch {} removing mac list {}'.format(self.connection.dpid,mac_to_remove))
-        for mac in mac_to_remove:
-            log.debug("in mac for")
-            del self.forward_table[mac]
-            # self.remove_flow(mac)
     def _handle_PacketIn (self, event):
         """
         Handles packet in messages from the switch.
@@ -105,6 +94,10 @@ class Tutorial (object):
         self.connection.send(msg)
 
     def send_flow_mod(self, packet, packet_in, out_port):
+        """
+        This function install a flow for a specific request to the switch
+        """
+        log.debug("Installing new flow rule on SW: {}; in_port: {}; dl_src: {}; dl_dst: {}".format(self.connection.dpid, packet_in.in_port, packet.src,packet.dst))
         fm = of.ofp_flow_mod()
         fm.match.in_port = packet_in.in_port
         fm.match.dl_dst = packet.dst
@@ -125,82 +118,67 @@ class Tutorial (object):
         # Send message to switch
         self.connection.send(fm)
 
-    def send_flow_mod_by_in_port(self, in_port, action, buffer_id, raw_data):
-        fm = of.ofp_flow_mod()
-        fm.match.in_port = in_port
-        # it is not mandatory to set fm.data or fm.buffer_id
-        if buffer_id != -1 and buffer_id is not None:
-            # Valid buffer ID was sent from switch, we do not need to encapsulate raw data in response
-            fm.buffer_id = buffer_id
-        else:
-            if raw_data is not None:
-                # No valid buffer ID was sent but raw data exists, send raw data with flow_mod
-                fm.data = raw_data
 
-        fm.actions.append(action)
 
-        # Send message to switch
-        self.connection.send(fm)
-#TODO: remove unused functions
-    def add_flood_rule_to_flowtable(self, buffer_id, raw_data, in_port):
-        action = of.ofp_action_output(port=of.OFPP_FLOOD)
-        # Use send_flow_mod_by_in_port to send an ofp_flow_mod to the switch with an output action
-        # to flood the packet and any future packets that are similar to it
-        self.send_flow_mod_by_in_port(in_port, action, buffer_id, raw_data)
-        pass
-
-    def act_like_hub (self, packet, packet_in):
-        """
-        Implement hub-like behavior -- send all packets to all ports besides
-        the input port.
-        """
-
-        ### We want to output to all ports -- we do that using the special
-        ### of.OFPP_FLOOD port as the output port.  (We could have also used
-        ### of.OFPP_ALL.)
-
-        ### Useful information on packet_in:
-        ### packet_in.buffer_id   - The ID of the buffer (packet data) on the switch
-        ### packet_in.data        - The raw data as sent by the switch
-        ### packet_in.in_port     - The port on which the packet arrived at the switch
-
-        # log.debug('Flooding packet')
-        ### We may either send the packet to switch and tell it to flood it_id, packet_in.data, of.OFPP_FLOOD, packet_in.in_port)
-        ### Or we may write a method that installs a permanent rule to flood such
-        ### packets in the switch:
-        self.add_flood_rule_to_flowtable(packet_in.buffer_id, packet_in.data, packet_in.in_port)
-        pass
 
     def act_like_switch(self, packet, packet_in):
-        # print(time.now())
-        print ("Act like switch")
+        """
+        This function manage the forwarding table of the switch.
+        the func. gets the packet the the switch passed to the controller,
+        and decide whether to ignore the packet or install a new flow to the switch,
+        or just flood the packet.
+        """
         if packet_in.in_port in self.unauthorized_ports:
-            log.debug("SW " + str(self.connection.dpid) + " got packet from port " + str(packet_in.in_port) + "but UNAUTHORIZED")
+            log.debug("SW " + str(self.connection.dpid) + " got packet from unauthorized port " + str(packet_in.in_port))
             return
         if packet.src in self.forward_table and packet_in.in_port != self.forward_table[packet.src]:
             self.remove_flow(packet.src)
         self.forward_table[packet.src] = packet_in.in_port
-        # print("pckt in ")
-        # print(packet.src, packet.dst)
-        # print(packet_in.in_port)
-        # print(self.connection)
-        # print(self.ports)
-
         if packet.dst in self.forward_table:
-            print("found in ports")
             self.send_flow_mod(packet, packet_in, self.forward_table[packet.dst])
         else:
-            ####FLOODING
-            log.debug('Flooding packet : dest = {} src = {} in_port = {}'.format(packet.dst, packet.src, packet_in.in_port))
-            self.send_packet(packet_in.buffer_id, packet_in.data, of.OFPP_FLOOD, packet_in.in_port)
+            ####FLOODING packet
+            ports_list = self.connection.features.ports
+            log.debug('SW:' + str(
+                self.connection.dpid) + '; Flooding packet: dest = {}; src = {}; from in_port = {}; to all ports except '
+                                        'unauthorized = {}'.format(packet.dst, packet.src, packet_in.in_port, self.unauthorized_ports))
+            for port in ports_list:
+                if port.port_no not in self.unauthorized_ports and \
+                                port.port_no < of.OFPP_MAX and \
+                                port.port_no != packet_in.in_port:
+                    self.send_packet(None, packet_in.data, port.port_no, packet_in.in_port)
 
     def remove_flow(self, source):
-        log.debug('Remove flow : dest = {}'.format(source))
+        """
+        This function removes a flow from the switch by source mac address.
+        It helps while links are turn off
+        """
+        log.debug('Remove flow from SW: {} ; dl_dest = {}'.format(self.connection.dpid, source))
         fm = of.ofp_flow_mod()
         fm.command = of.OFPFC_DELETE
-        # TODO : add match to dl_src and match.in_port
-        fm.match.dl_dst = source # change this if necessary
+        # fm.match.dl_dst = source # change this if necessary
+        fm.match.dl_dst = source  # change this if necessary
         self.connection.send(fm) # send flow-mod message
+
+    def remove_rules_by_port(self, port):
+        """
+        This function removes a flow from the switch according to a given port number.
+        It helps while removing edged in the graph.
+        it will clean all the flows in the switch that connected to the port
+        """
+        log.debug("Remove flow from SW: {} out_port:{}".format(self.connection.dpid,port))
+        msg = of.ofp_flow_mod(command=of.OFPFC_DELETE, out_port=port)
+        self.connection.send(msg)
+        mac_to_remove = []
+        for mac, in_port in self.forward_table.iteritems():
+            if in_port == port:
+                mac_to_remove.append(mac)
+                fm = of.ofp_flow_mod()
+                fm.command = of.OFPFC_DELETE
+                fm.match.dl_src = mac
+                self.connection.send(fm)
+        for mac in mac_to_remove:
+            del self.forward_table[mac]
 
 
 class Discovery(object):
@@ -218,6 +196,14 @@ class Discovery(object):
 
 
     def is_port_active(self, node, port):
+        """"
+        This function gets a Node and a port number, It will go over the sub_tree,
+        (sub_tree is the kruskal minimum spanning tree) and will return if the given
+        port is a forbidden port.
+        :return:
+            True : if link is active
+            False: if link is forbidden
+        """
         for edge in self.sub_tree:
             if node in edge:
                 if self.topology.nodes[node][port][0] in edge:
@@ -229,10 +215,11 @@ class Discovery(object):
         and event.connection.send(...) to send messages to the switch.
         """
         timer = utils.Timer(Discovery.LLDP_INTERVAL,self._send_lldp,args=[event],recurring=True)
-        log.debug("New switch ConnectionUp dpid : {}".format(event.dpid))
+        log.debug("New switch ConnectionUp dpid: {}".format(event.dpid))
         self.lock.acquire()
         node = utils.Node(event.dpid)
         self.set_tutorial(node, event.connection)
+
         self.topology.add_node(node, {})
         self.lock.release()
         #send flow to the switch to pass every lldp packet to the controller
@@ -247,12 +234,13 @@ class Discovery(object):
 
     @staticmethod
     def set_tutorial(node, connection):
+        """"
+        connect given node to his real Tutorial.
+        """
         for tuto in tutorial_list:
             if tuto.connection == connection:
-                node.turorial = tuto
-                log.debug("set_Tutorial, node: {} tutorial {}".format(node.dpid, node.turorial))
-
-                #TODO:: return true
+                node.tutorial = tuto
+                return True
         return False
     def _handle_ConnectionDown(self, event):
         """"
@@ -261,8 +249,11 @@ class Discovery(object):
         log.debug("_handle_ConnectionDown: dpid {}".format(event.dpid))
         self.lock.acquire()
         node = self.get_node(event.dpid)
+        far_ends = []
         for port, port_data in self.topology.nodes[node].iteritems():
-            self.remove_edge((node,port_data[0]))
+                far_ends.append(port_data[0])
+        for far in far_ends:
+            self.remove_edge((node, far))
         self.topology.remove_node(node)
         self.Kruskal_Mst()
         self.lock.release()
@@ -272,25 +263,22 @@ class Discovery(object):
         Will be called when a link changes. Specifically, when event.ofp.desc.config is 1,
         it means that the link is down. Use event.dpid for switch ID and event.port for port number.
         """
-        log.debug("_handle_PortStatus : SW {} port{}, status {}".format(event.dpid,event.port, event.ofp.desc.config))
-
+        log.debug("_handle_PortStatus: SW {} port{}; status {}".format(event.dpid, event.port, event.ofp.desc.config))
         if event.ofp.desc.config == 1:
             #port is down
             self.lock.acquire()
             node = self.get_node(event.dpid)
-            # self.node.tutorial.remove_flow_port(event.port)
-            msg = of.ofp_flow_mod(command=of.OFPFC_DELETE, out_port=event.port)
-            event.connection.send(msg)
             if event.port in self.topology.nodes[node]:
                 far_node = self.topology.nodes[node][event.port][0]
                 edge = (node, far_node)
                 self.remove_edge(edge)
-                log.debug(str(node) + self.ports_dict_to_string(self.topology.nodes[node]))
-                log.debug(str(far_node) +self.ports_dict_to_string(self.topology.nodes[far_node]))
+                log.debug("Removed edge (sw{})<>(sw{}); Reason: ports are down".format(str(node),str(far_node)))
+                # log.debug(str(far_node) +self.ports_dict_to_string(self.topology.nodes[far_node]))
                 self.Kruskal_Mst()
-            else:
-                log.debug("Trying to remove a not active edge : Switch {} port{}".format(event.dpid, event.port))
+            # else:
+                # log.debug("Trying to remove a not active edge : Switch {} port{}".format(event.dpid, event.port))
             self.lock.release()
+
 
 
 
@@ -317,19 +305,21 @@ class Discovery(object):
         if self.topology.get_edge(node, far_node):
             self.topology.update_edge(node, far_node, time.time())
         else:
+            log.debug("Discovered new edge: (sw: " + str(node) + "; port: " + str(event.port) + ") <> (sw: " + str(
+                r_dpid) + "; port: " + str(r_port) + ")")
             self.topology.add_edge(node,far_node,time.time())
             self.topology.nodes[node][event.port] = (far_node,r_port)
             self.topology.nodes[far_node][r_port] = (node, event.port)
             self.Kruskal_Mst()
-            log.debug("added new edge")
-            log.debug(str(node) + self.ports_dict_to_string(self.topology.nodes[node]))
-            log.debug(str(far_node) + self.ports_dict_to_string(self.topology.nodes[far_node]))
         self.lock.release()
 
     def ports_dict_to_string(self,ports):
+        """"
+        This function gets a dictionary of ports and return a string of all the nodes.
+        raised for log reasons.
+        """
         str_ports = ''
         for port,far in ports.iteritems():
-
             str_ports += "p:" + str(port) + " far_node:"+str(far[0]) + " far_port:"+str(far[1])
         return str_ports
 
@@ -379,7 +369,8 @@ class Discovery(object):
         edges_to_remove = []
         for edge,data in self.topology.edges.iteritems():
             if time.time()-data > Discovery.TIME_TO_REMOVE:
-                log.debug("in automatic removal : edge ({},{})".format(edge[0].dpid,edge[1].dpid) )
+                log.debug("Removed edge (sw{}<>sw{}); Reason: LLDP not arrived for long time. timeout. : "
+                          "".format(edge[0].dpid,edge[1].dpid) )
                 edges_to_remove += [edge]
         if edges_to_remove:
             for e in edges_to_remove:
@@ -388,9 +379,8 @@ class Discovery(object):
 
         self.lock.release()
 
-    def remove_edge(self, edge, mod = 'both'):
+    def remove_edge(self, edge):
         # del information from nodes
-
         port0 = -1
         port1 = -1
         log.debug("remove edge ({},{})".format(edge[0],edge[1]))
@@ -400,8 +390,9 @@ class Discovery(object):
                 port0 = port
                 port1 = port_data[1]
         del self.topology.nodes[edge[0]][port0]
-        if 'both' in mod:
-            del self.topology.nodes[edge[1]][port1]
+        edge[0].tutorial.remove_rules_by_port(port0)
+        del self.topology.nodes[edge[1]][port1]
+        edge[1].tutorial.remove_rules_by_port(port1)
         # remove edge
         self.topology.delete_edge(edge[0], edge[1])
     def get_node(self, dpid):
@@ -410,6 +401,12 @@ class Discovery(object):
                 return node
 
     def Kruskal_Mst(self):
+        """"
+        This function calculate the minimum spanning tree by kruskal algorithm
+        it will update the self.sub_tree with his decision.
+        It also calls for update_unauthorized_ports that will update all the nodes
+        of the graph by the MST demands.
+        """
         self.sub_tree = []
         uf = utils.UnionFind()
         for v in self.topology.nodes:
@@ -418,28 +415,31 @@ class Discovery(object):
             if uf.find(edge[0]) != uf.find(edge[1]):
                 self.sub_tree.append((edge[0],edge[1]))
                 uf.union(edge[0],edge[1])
-        log.debug("Kruskal new tree : {}".format(self.edges_to_str(self.sub_tree)))
-        log.debug("Kruskal full graph : {}".format(self.edges_to_str(self.topology.edges)))
+        log.debug("Kruskal full graph: {}".format(self.edges_to_str(self.topology.edges)))
+        log.debug("Kruskal MST: {} [these are the active links]".format(self.edges_to_str(self.sub_tree)))
         self.update_unauthorized_ports()
 
-
     def edges_to_str(self,edges):
+        """"
+        :return: string of all the edges
+        """
         str_to_print = ''
         for edge in edges:
             str_to_print += '(' + str(edge[0]) + "," + str(edge[1]) + ") "
         return str_to_print
 
     def update_unauthorized_ports(self):
+        """"
+        This Function will go over all the nodes and will update all the unauthorized ports
+        it will call updae_flow_table of each node that will update his flow table.
+        """
         for node, ports in self.topology.nodes.iteritems():
-            node.turorial.unauthorized_ports = []
+            node.tutorial.unauthorized_ports = []
             for port in ports:
                 if not self.is_port_active(node, port):
-                    node.turorial.unauthorized_ports.append(port)
-            log.debug("Node : " + str(node) + " un_ports : " + str(node.turorial.unauthorized_ports))
-            node.turorial.update_flow_table()
-
-
-
+                    node.tutorial.unauthorized_ports.append(port)
+            log.debug("sw: " + str(node) + "; unauthorized ports by ST are: " + str(node.tutorial.unauthorized_ports))
+            node.tutorial.update_flow_table()
 
 def launch ():
     """
